@@ -186,23 +186,33 @@ fn read_header<R: Read + Seek>(
         *slot = read_i32(&header_payload[off..off + 4], reverse_endian);
     }
 
+    // ICNTRL slot layout (0-based, CORD magic excluded; matches VMD's
+    // molfile_plugin/dcdplugin.c offsets into its 80-byte hdrbuf, where each
+    // PLUMED2 hdrbuf+K corresponds to ICNTRL[K/4]):
+    //   [0]  NSET           [11] HAS_4DIMS
+    //   [1]  ISTART         [19] CHARMM_VER
+    //   [2]  NSAVC
+    //   [3]  NSTEP
+    //   [8]  NAMNF (fixed atoms in CHARMM; high bits of f64 DELTA in X-PLOR)
+    //   [9]  DELTA f32 (CHARMM) / spans 9..=10 as f64 DELTA in X-PLOR
+    //   [10] HAS_BOX (extra unit-cell block per frame)
     let charmm_ver = icntrl[19];
     let is_charmm = charmm_ver != 0;
-    let has_extra_block = is_charmm && (icntrl[11] != 0);
-    let has_4dims = is_charmm && (icntrl[12] != 0);
+    let has_extra_block = is_charmm && (icntrl[10] != 0);
+    let has_4dims = is_charmm && (icntrl[11] != 0);
     let nfixed: usize = if is_charmm {
-        icntrl[9].max(0) as usize
+        icntrl[8].max(0) as usize
     } else {
         0
     };
 
-    // DELTA: f32 in CHARMM (slot 10 = bytes 44..48), f64 in X-PLOR (spans
-    // slots 8 & 9 = bytes 36..44).  Read raw bytes from the un-permuted payload
-    // and apply a single endian swap appropriate to the wider type.
+    // DELTA in payload bytes: CHARMM f32 at 40..44 (= ICNTRL[9]); X-PLOR f64
+    // at 40..48 (= ICNTRL[9..=10]).  Read from the un-permuted payload and
+    // apply a single endian swap appropriate to the wider type.
     let delta_akma: f64 = if is_charmm {
-        read_f32(&header_payload[44..48], reverse_endian) as f64
+        read_f32(&header_payload[40..44], reverse_endian) as f64
     } else {
-        read_f64(&header_payload[36..44], reverse_endian)
+        read_f64(&header_payload[40..48], reverse_endian)
     };
 
     // ----- TITLE record -----
@@ -596,10 +606,10 @@ mod tests {
         ic[0] = nset; // NSET
         ic[1] = 1; // ISTART
         ic[2] = 1; // NSAVC
-        ic[9] = nfixed; // NAMNF
-        ic[10] = 1.0f32.to_bits() as i32; // DELTA = 1.0 as f32
-        ic[11] = if has_extra { 1 } else { 0 }; // HAS_BOX
-        ic[12] = 0; // HAS_4D
+        ic[8] = nfixed; // NAMNF
+        ic[9] = 1.0f32.to_bits() as i32; // DELTA = 1.0 as f32
+        ic[10] = if has_extra { 1 } else { 0 }; // HAS_BOX
+        ic[11] = 0; // HAS_4D
         ic[19] = 1; // CHARMM_VER (non-zero -> CHARMM)
         ic
     }

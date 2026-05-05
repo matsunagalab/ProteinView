@@ -603,6 +603,7 @@ mod tests {
                 },
             ],
             ligands: Vec::new(),
+            origin_offset: [0.0; 3],
         }
     }
 
@@ -700,6 +701,7 @@ mod tests {
                 },
             ],
             ligands: Vec::new(),
+            origin_offset: [0.0; 3],
         };
 
         let analysis = analyze_interface(&protein, 4.5);
@@ -735,6 +737,7 @@ mod tests {
             name: "empty".to_string(),
             chains: vec![],
             ligands: Vec::new(),
+            origin_offset: [0.0; 3],
         };
         let analysis = analyze_interface(&protein, 4.5);
 
@@ -865,6 +868,7 @@ mod tests {
                 },
             ],
             ligands: Vec::new(),
+            origin_offset: [0.0; 3],
         };
         let contacts = vec![Contact {
             chain_a: 0,

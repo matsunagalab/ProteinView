@@ -159,7 +159,24 @@ proteinview --fetch 1UBQ
 
 # Choose color scheme and visualization
 proteinview examples/1UBQ.pdb --color rainbow --mode wireframe
+
+# Play an MD trajectory (DCD) over a topology PDB
+proteinview examples/1UBQ.pdb --dcd path/to/traj.dcd
 ```
+
+## Trajectory Playback (DCD)
+
+Pass `--dcd <path>` together with the topology PDB to animate an MD
+trajectory.  ProteinView reads the binary DCD format used by CHARMM, NAMD,
+VMD and friends (port of VMD's `molfile_plugin`), supporting LE/BE, 32/64-bit
+Fortran records, fixed atoms, and the optional unit-cell extra block.
+
+The atom count and order of the topology PDB must match the DCD.  Strip
+crystallographic waters or expand a solvated topology to match before
+running.  Playback is wall-clock-driven, so dropped renders over slow
+links don't stretch the perceived timeline.  Over SSH the default
+playback rate drops to 10 fps and the default visualization to Backbone
+to keep terminal traffic manageable.
 
 ## Keybindings
 
@@ -180,6 +197,10 @@ proteinview examples/1UBQ.pdb --color rainbow --mode wireframe
 | `g` | Toggle ligands |
 | `[`/`]` | Prev/next chain |
 | `Space` | Auto-rotate |
+| `p` | Play / pause trajectory |
+| `,` / `.` | Step backward / forward 1 frame |
+| `<` / `>` | Slower / faster playback |
+| `Home` / `End` | First / last frame |
 | `?` | Help |
 | `q` | Quit |
 

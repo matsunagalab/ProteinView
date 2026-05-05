@@ -110,6 +110,7 @@ fn parse_xyz_inner(content: &str, path: Option<&str>) -> Result<Protein> {
         name,
         chains: vec![chain],
         ligands: vec![],
+        origin_offset: [0.0; 3],
     })
 }
 

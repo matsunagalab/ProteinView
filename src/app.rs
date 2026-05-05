@@ -1,9 +1,11 @@
 use std::sync::mpsc;
+use std::time::Instant;
 
 use ratatui_image::picker::Picker;
 
 use crate::model::interface::{InterfaceAnalysis, analyze_binding_pockets, analyze_interface};
 use crate::model::protein::Protein;
+use crate::model::trajectory::Trajectory;
 use crate::render::camera::Camera;
 use crate::render::color::{ColorScheme, ColorSchemeType};
 use crate::render::ribbon::{RibbonTriangle, generate_ribbon_mesh};
@@ -94,6 +96,7 @@ pub struct AppConfig {
     pub viz_mode: VizMode,
     pub user_explicit_mode: bool,
     pub color_override: Option<ColorSchemeType>,
+    pub trajectory: Option<Trajectory>,
 }
 
 /// Main application state
@@ -142,6 +145,20 @@ pub struct App {
     /// Cached result of `total_residues > LARGE_STRUCTURE_THRESHOLD`, set once
     /// in `App::new` to avoid per-frame O(n) `residue_count()` calls.
     pub is_large: bool,
+    /// Loaded MD trajectory; `None` when only a single static structure is shown.
+    pub trajectory: Option<Trajectory>,
+    /// Index of the currently displayed frame in `trajectory.frames`.
+    pub frame_index: usize,
+    /// True while frames are auto-advanced on each tick.
+    pub playing: bool,
+    /// Target frames-per-second for trajectory playback.  Wall-clock-driven so
+    /// dropped renders never slow the perceived playback (important over SSH).
+    pub playback_fps: f64,
+    /// Wrap to frame 0 after the last frame instead of stopping.
+    pub loop_playback: bool,
+    /// `(when playback resumed, frame_index at that moment)` so wall-clock
+    /// pacing can compute the target frame independently of render cadence.
+    play_anchor: Option<(Instant, usize)>,
 }
 
 impl App {
@@ -157,8 +174,16 @@ impl App {
             viz_mode,
             user_explicit_mode,
             color_override,
+            trajectory,
         } = config;
         protein.center();
+        // If a trajectory is loaded, apply frame 0 immediately so the user sees
+        // the first MD frame rather than the unadulterated PDB on startup.
+        if let Some(traj) = &trajectory
+            && let Some(first) = traj.frames.first()
+        {
+            let _ = protein.apply_frame(first);
+        }
         // If user explicitly requested pLDDT via CLI, trust that even if
         // the heuristic disagrees.
         let has_plddt = protein.has_plddt() || color_override == Some(ColorSchemeType::Plddt);
@@ -236,12 +261,28 @@ impl App {
             (ia, true)
         };
 
+        let connection_type = ConnectionType::detect();
+        let has_trajectory = trajectory.is_some();
+
         // For large structures, default to Backbone mode for instant
         // interactivity — but only if the user didn't explicitly choose a mode.
-        let viz_mode = if is_large && !user_explicit_mode && viz_mode == VizMode::Cartoon {
+        // Same default for trajectory playback over SSH: regenerating the
+        // ribbon mesh per frame is expensive and the resulting traffic
+        // saturates SSH bandwidth.
+        let viz_mode = if !user_explicit_mode
+            && viz_mode == VizMode::Cartoon
+            && (is_large || (has_trajectory && connection_type == ConnectionType::Ssh))
+        {
             VizMode::Backbone
         } else {
             viz_mode
+        };
+
+        // SSH gets a slower default playback rate to keep terminal data volume
+        // reasonable; local sessions can run at the full render rate.
+        let playback_fps = match connection_type {
+            ConnectionType::Local => 30.0,
+            ConnectionType::Ssh => 10.0,
         };
 
         let initial_scheme = color_override.unwrap_or(ColorSchemeType::Structure);
@@ -253,8 +294,6 @@ impl App {
         } else {
             (Vec::new(), true)
         };
-
-        let connection_type = ConnectionType::detect();
 
         Self {
             protein,
@@ -281,6 +320,12 @@ impl App {
             interface_computed,
             interface_rx,
             is_large,
+            trajectory,
+            frame_index: 0,
+            playing: false,
+            playback_fps,
+            loop_playback: true,
+            play_anchor: None,
         }
     }
 
@@ -454,6 +499,129 @@ impl App {
             if self.ssh_hd_warning_frames == 0 {
                 self.ssh_hd_warning = false;
             }
+        }
+
+        self.advance_trajectory();
+    }
+
+    /// Advance the displayed trajectory frame based on wall-clock elapsed
+    /// time since `play_anchor` was set.  Using elapsed time (rather than
+    /// "+= playback_step every tick") means dropped render frames don't slow
+    /// the visible playback — important when streaming to a slow SSH client.
+    fn advance_trajectory(&mut self) {
+        let Some(traj) = self.trajectory.as_ref() else {
+            return;
+        };
+        if !self.playing {
+            return;
+        }
+        let nframes = traj.frames.len();
+        if nframes == 0 {
+            return;
+        }
+        let (anchor_instant, anchor_frame) = match self.play_anchor {
+            Some(a) => a,
+            None => {
+                let a = (Instant::now(), self.frame_index);
+                self.play_anchor = Some(a);
+                a
+            }
+        };
+        let elapsed = anchor_instant.elapsed().as_secs_f64();
+        let advance = (elapsed * self.playback_fps) as usize;
+        let raw_target = anchor_frame.saturating_add(advance);
+        let new_idx = if self.loop_playback {
+            raw_target % nframes
+        } else if raw_target >= nframes {
+            // Reached the end: clamp to last frame and stop.
+            self.playing = false;
+            self.play_anchor = None;
+            nframes - 1
+        } else {
+            raw_target
+        };
+
+        if new_idx != self.frame_index {
+            self.frame_index = new_idx;
+            // apply_frame ignores any error here because the trajectory length
+            // matched topology length at load time.
+            if let Err(e) = self.protein.apply_frame(&traj.frames[new_idx]) {
+                debug_assert!(false, "apply_frame failed at runtime: {e}");
+            }
+            self.mesh_dirty = true;
+        }
+    }
+
+    /// Toggle play / pause.
+    pub fn toggle_play(&mut self) {
+        if self.trajectory.is_none() {
+            return;
+        }
+        self.playing = !self.playing;
+        if self.playing {
+            self.play_anchor = Some((Instant::now(), self.frame_index));
+        } else {
+            self.play_anchor = None;
+        }
+    }
+
+    /// Jump by `delta` frames (negative = backward).  Pauses playback.
+    pub fn step_frame(&mut self, delta: i64) {
+        let Some(traj) = self.trajectory.as_ref() else {
+            return;
+        };
+        let nframes = traj.frames.len();
+        if nframes == 0 {
+            return;
+        }
+        self.playing = false;
+        self.play_anchor = None;
+        let n = nframes as i64;
+        let mut new_idx = self.frame_index as i64 + delta;
+        new_idx = new_idx.rem_euclid(n);
+        let new_idx = new_idx as usize;
+        if new_idx != self.frame_index {
+            self.frame_index = new_idx;
+            let _ = self.protein.apply_frame(&traj.frames[new_idx]);
+            self.mesh_dirty = true;
+        }
+    }
+
+    /// Seek to a specific frame.
+    pub fn seek(&mut self, idx: usize) {
+        let Some(traj) = self.trajectory.as_ref() else {
+            return;
+        };
+        let nframes = traj.frames.len();
+        if nframes == 0 {
+            return;
+        }
+        let idx = idx.min(nframes - 1);
+        self.playing = false;
+        self.play_anchor = None;
+        if idx != self.frame_index {
+            self.frame_index = idx;
+            let _ = self.protein.apply_frame(&traj.frames[idx]);
+            self.mesh_dirty = true;
+        }
+    }
+
+    /// Multiply / divide the playback rate by ~1.5×.  Re-anchors so the
+    /// new pace begins from the current frame.
+    pub fn change_speed(&mut self, faster: bool) {
+        if self.trajectory.is_none() {
+            return;
+        }
+        const FACTOR: f64 = 1.5;
+        const MIN_FPS: f64 = 0.5;
+        const MAX_FPS: f64 = 120.0;
+        if faster {
+            self.playback_fps = (self.playback_fps * FACTOR).min(MAX_FPS);
+        } else {
+            self.playback_fps = (self.playback_fps / FACTOR).max(MIN_FPS);
+        }
+        if self.playing {
+            self.play_anchor = Some((Instant::now(), self.frame_index));
         }
     }
 

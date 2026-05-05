@@ -94,6 +94,7 @@ pub fn load_structure(path: &str) -> Result<Protein> {
         name,
         chains,
         ligands,
+        origin_offset: [0.0; 3],
     };
 
     // Assign secondary structure from HELIX/SHEET records in the PDB file

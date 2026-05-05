@@ -972,6 +972,7 @@ mod tests {
                 molecule_type: MoleculeType::Protein,
             }],
             ligands: Vec::new(),
+            origin_offset: [0.0; 3],
         };
 
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/1ZVH.cif");

@@ -48,6 +48,10 @@ pub struct Protein {
     pub name: String,
     pub chains: Vec<Chain>,
     pub ligands: Vec<Ligand>,
+    /// Translation applied by [`Protein::center`] to bring the centroid to
+    /// the origin.  Stored so trajectory frames can be brought into the
+    /// same centered frame via the same offset.
+    pub origin_offset: [f64; 3],
 }
 
 /// A polypeptide chain
@@ -147,7 +151,9 @@ impl Protein {
             .fold(0.0f64, f64::max)
     }
 
-    /// Center the protein at the origin
+    /// Center the protein at the origin and remember the translation in
+    /// [`Self::origin_offset`] so that trajectory frames (which arrive in the
+    /// original Cartesian frame) can be brought into the same centered frame.
     pub fn center(&mut self) {
         let chain_atoms: Vec<&Atom> = self
             .chains
@@ -189,6 +195,46 @@ impl Protein {
                 atom.z -= cz;
             }
         }
+        self.origin_offset = [cx, cy, cz];
+    }
+
+    /// Replace atom coordinates from a trajectory frame.
+    ///
+    /// `coords` is laid out in the same atom order the structure was loaded:
+    /// all chain → residue → atom positions first, then all ligand atoms.
+    /// The protein's [`origin_offset`](Self::origin_offset) is subtracted so
+    /// the frame lands in the same centered frame established by [`Self::center`].
+    pub fn apply_frame(&mut self, coords: &[[f32; 3]]) -> anyhow::Result<()> {
+        let expected = self.atom_count();
+        if coords.len() != expected {
+            anyhow::bail!(
+                "trajectory frame atom count {} does not match topology {expected}",
+                coords.len()
+            );
+        }
+        let [ox, oy, oz] = self.origin_offset;
+        let mut idx = 0usize;
+        for chain in &mut self.chains {
+            for residue in &mut chain.residues {
+                for atom in &mut residue.atoms {
+                    let c = coords[idx];
+                    atom.x = c[0] as f64 - ox;
+                    atom.y = c[1] as f64 - oy;
+                    atom.z = c[2] as f64 - oz;
+                    idx += 1;
+                }
+            }
+        }
+        for ligand in &mut self.ligands {
+            for atom in &mut ligand.atoms {
+                let c = coords[idx];
+                atom.x = c[0] as f64 - ox;
+                atom.y = c[1] as f64 - oy;
+                atom.z = c[2] as f64 - oz;
+                idx += 1;
+            }
+        }
+        Ok(())
     }
 
     /// Get total number of ligands (including ions)
@@ -285,6 +331,7 @@ mod tests {
                     .collect(),
             }],
             ligands: vec![],
+            origin_offset: [0.0; 3],
         }
     }
 
@@ -310,6 +357,7 @@ mod tests {
             name: "empty".to_string(),
             chains: vec![],
             ligands: vec![],
+            origin_offset: [0.0; 3],
         };
         assert!(!protein.has_plddt());
     }
@@ -320,6 +368,69 @@ mod tests {
         let protein =
             protein_from_bfactors(&[45.0, 42.0, 65.0, 48.0, 40.0, 55.0, 50.0, 38.0, 60.0, 47.0]);
         assert!(!protein.has_plddt());
+    }
+
+    #[test]
+    fn test_apply_frame_accounts_for_origin_offset() {
+        // A two-atom protein at (3, 0, 0) and (5, 0, 0) — centroid (4, 0, 0).
+        let mut p = Protein {
+            name: "t".to_string(),
+            chains: vec![Chain {
+                id: "A".to_string(),
+                molecule_type: MoleculeType::Protein,
+                residues: vec![Residue {
+                    name: "ALA".to_string(),
+                    seq_num: 1,
+                    atoms: vec![
+                        Atom {
+                            name: "CA".to_string(),
+                            element: "C".to_string(),
+                            x: 3.0,
+                            y: 0.0,
+                            z: 0.0,
+                            b_factor: 0.0,
+                            is_backbone: true,
+                            is_hetero: false,
+                        },
+                        Atom {
+                            name: "CB".to_string(),
+                            element: "C".to_string(),
+                            x: 5.0,
+                            y: 0.0,
+                            z: 0.0,
+                            b_factor: 0.0,
+                            is_backbone: false,
+                            is_hetero: false,
+                        },
+                    ],
+                    secondary_structure: SecondaryStructure::Coil,
+                }],
+            }],
+            ligands: vec![],
+            origin_offset: [0.0; 3],
+        };
+        p.center();
+        assert!((p.origin_offset[0] - 4.0).abs() < 1e-9);
+
+        // Apply a frame whose centroid is at (10, 0, 0).  Atoms should land
+        // centered at +/- 1 (relative offset preserved because we subtract
+        // the protein's own origin_offset, not the frame's).
+        p.apply_frame(&[[9.0, 0.0, 0.0], [11.0, 0.0, 0.0]]).unwrap();
+        let atoms = &p.chains[0].residues[0].atoms;
+        assert!((atoms[0].x - 5.0).abs() < 1e-6); // 9 - 4
+        assert!((atoms[1].x - 7.0).abs() < 1e-6); // 11 - 4
+    }
+
+    #[test]
+    fn test_apply_frame_atom_count_mismatch() {
+        let mut p = Protein {
+            name: "t".to_string(),
+            chains: vec![],
+            ligands: vec![],
+            origin_offset: [0.0; 3],
+        };
+        let err = p.apply_frame(&[[0.0; 3]]).unwrap_err();
+        assert!(err.to_string().contains("atom count"));
     }
 
     #[test]

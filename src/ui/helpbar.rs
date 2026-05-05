@@ -4,9 +4,11 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
+use crate::app::App;
+
 /// Render the keybinding hints bar at the bottom
-pub fn render_helpbar(frame: &mut Frame, area: Rect) {
-    let help = Paragraph::new(Line::from(vec![
+pub fn render_helpbar(frame: &mut Frame, area: Rect, app: &App) {
+    let mut spans = vec![
         Span::styled("╰── ", Style::default().fg(Color::DarkGray)),
         Span::styled(
             "h/l",
@@ -85,7 +87,28 @@ pub fn render_helpbar(frame: &mut Frame, area: Rect) {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(": quit ", Style::default().fg(Color::Gray)),
-        Span::styled("──╯", Style::default().fg(Color::DarkGray)),
-    ]));
+    ];
+
+    if app.trajectory.is_some() {
+        spans.extend_from_slice(&[
+            Span::styled(
+                "p",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(": play  ", Style::default().fg(Color::Gray)),
+            Span::styled(
+                ",/.",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(": step ", Style::default().fg(Color::Gray)),
+        ]);
+    }
+
+    spans.push(Span::styled("──╯", Style::default().fg(Color::DarkGray)));
+    let help = Paragraph::new(Line::from(spans));
     frame.render_widget(help, area);
 }

@@ -11,7 +11,7 @@ pub fn render_help_overlay(frame: &mut Frame, area: Rect) {
         return;
     }
     let popup_width = 60u16.min(area.width.saturating_sub(4));
-    let popup_height = 23u16.min(area.height.saturating_sub(4));
+    let popup_height = 28u16.min(area.height.saturating_sub(4));
     let x = (area.width - popup_width) / 2;
     let y = (area.height - popup_height) / 2;
     let popup_area = Rect::new(x, y, popup_width, popup_height);
@@ -85,6 +85,22 @@ pub fn render_help_overlay(frame: &mut Frame, area: Rect) {
         Line::from(vec![
             Span::styled("  Space      ", Style::default().fg(Color::Yellow)),
             Span::raw("Toggle auto-rotation"),
+        ]),
+        Line::from(vec![
+            Span::styled("  p          ", Style::default().fg(Color::Yellow)),
+            Span::raw("Play / pause trajectory"),
+        ]),
+        Line::from(vec![
+            Span::styled("  , / .      ", Style::default().fg(Color::Yellow)),
+            Span::raw("Step backward / forward"),
+        ]),
+        Line::from(vec![
+            Span::styled("  < / >      ", Style::default().fg(Color::Yellow)),
+            Span::raw("Slower / faster playback"),
+        ]),
+        Line::from(vec![
+            Span::styled("  Home/End   ", Style::default().fg(Color::Yellow)),
+            Span::raw("First / last frame"),
         ]),
         Line::from(vec![
             Span::styled("  ?          ", Style::default().fg(Color::Yellow)),

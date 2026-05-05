@@ -68,6 +68,11 @@ struct Cli {
     /// Number of render threads (default: 4)
     #[arg(long, default_value = "4")]
     threads: usize,
+
+    /// Path to a DCD trajectory file.  Plays back over the topology supplied
+    /// in the positional file argument.
+    #[arg(long, value_name = "PATH")]
+    dcd: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -115,6 +120,22 @@ fn main() -> Result<()> {
             format!(", {} ligands", protein.ligand_count())
         },
     );
+
+    // Optional DCD trajectory.  Atom counts must match; an explicit error
+    // message guides the user to a topology consistent with the trajectory.
+    let trajectory = if let Some(dcd_path) = &cli.dcd {
+        let traj = parser::dcd::load_dcd(dcd_path, protein.atom_count())?;
+        eprintln!(
+            "Trajectory: {} ({} frames, {} atoms{})",
+            dcd_path,
+            traj.frames.len(),
+            protein.atom_count(),
+            if traj.is_charmm { ", CHARMM" } else { ", X-PLOR" },
+        );
+        Some(traj)
+    } else {
+        None
+    };
 
     // Open log file if requested
     let mut logfile: Option<std::fs::File> = match &cli.log {
@@ -243,6 +264,7 @@ fn main() -> Result<()> {
             viz_mode,
             user_explicit_mode,
             color_override,
+            trajectory,
         },
         term_cols,
         term_rows,
@@ -323,6 +345,18 @@ fn main() -> Result<()> {
                         KeyCode::Char('[') => app.prev_chain(),
                         KeyCode::Char(']') => app.next_chain(),
                         KeyCode::Char(' ') => app.camera.auto_rotate = !app.camera.auto_rotate,
+                        KeyCode::Char('p') => app.toggle_play(),
+                        KeyCode::Char('.') => app.step_frame(1),
+                        KeyCode::Char(',') => app.step_frame(-1),
+                        KeyCode::Char('>') => app.change_speed(true),
+                        KeyCode::Char('<') => app.change_speed(false),
+                        KeyCode::Home => app.seek(0),
+                        KeyCode::End => {
+                            if let Some(traj) = &app.trajectory {
+                                let last = traj.frames.len().saturating_sub(1);
+                                app.seek(last);
+                            }
+                        }
                         KeyCode::Char('f') => app.toggle_interface(),
                         KeyCode::Char('I') => app.toggle_interactions(),
                         KeyCode::Char('g') => app.toggle_ligands(),
@@ -440,7 +474,7 @@ fn main() -> Result<()> {
             ui::header::render_header(frame, chunks[0], &app.protein.name);
             ui::viewport::render_viewport(frame, chunks[1], &app);
             ui::statusbar::render_statusbar(frame, chunks[2], &app);
-            ui::helpbar::render_helpbar(frame, chunks[3]);
+            ui::helpbar::render_helpbar(frame, chunks[3], &app);
 
             if app.show_help {
                 ui::help_overlay::render_help_overlay(frame, frame.area());

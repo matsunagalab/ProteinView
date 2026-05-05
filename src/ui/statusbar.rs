@@ -115,6 +115,30 @@ pub fn render_statusbar(frame: &mut Frame, area: Rect, app: &App) {
             spans.push(Span::raw(" "));
         }
 
+        // Trajectory frame indicator
+        if let Some(traj) = &app.trajectory {
+            let nframes = traj.frames.len();
+            let icon = if app.playing { "\u{25B6}" } else { "\u{2225}" };
+            let label = format!(
+                "{} Frame {}/{} {:.0}fps",
+                icon,
+                app.frame_index + 1,
+                nframes,
+                app.playback_fps
+            );
+            spans.push(Span::styled(
+                "\u{2502} ",
+                Style::default().fg(Color::DarkGray),
+            ));
+            let color = if app.playing {
+                Color::Rgb(0, 220, 130)
+            } else {
+                Color::Rgb(180, 180, 180)
+            };
+            spans.push(Span::styled(label, Style::default().fg(color)));
+            spans.push(Span::raw(" "));
+        }
+
         let info = Paragraph::new(Line::from(spans));
         frame.render_widget(info, info_area);
     }

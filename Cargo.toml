@@ -24,7 +24,7 @@ anyhow = "1"
 base64 = "0.22"
 flate2 = "1"
 rayon = "1"
-reqwest = { version = "0.12", features = ["blocking"], optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"], optional = true }
 tokio = { version = "1", features = ["rt", "macros"], optional = true }
 
 [features]
